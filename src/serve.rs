@@ -8,7 +8,6 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use arc_swap::ArcSwap;
 use log::{error, info};
 use tokio::net::UdpSocket;
 
@@ -100,28 +99,8 @@ pub async fn run(config_path: String) -> crate::Result<()> {
         .clone()
         .unwrap_or_else(crate::data_dir);
 
-    // Build initial TLS config before ServerCtx (so ArcSwap is ready at construction)
-    let initial_tls = if config.proxy.enabled && config.proxy.tls_port > 0 {
-        let service_names = service_store.names();
-        match crate::tls::build_tls_config(
-            &config.proxy.tld,
-            &service_names,
-            Vec::new(),
-            &resolved_data_dir,
-        ) {
-            Ok(tls_config) => Some(ArcSwap::from(tls_config)),
-            Err(e) => {
-                if let Some(advisory) = crate::tls::try_data_dir_advisory(&e, &resolved_data_dir) {
-                    eprint!("{}", advisory);
-                } else {
-                    log::warn!("TLS setup failed, HTTPS proxy disabled: {}", e);
-                }
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let (initial_tls, tls_byo) =
+        crate::tls::build_proxy_tls(&config, &service_store, &resolved_data_dir);
 
     let doh_enabled = initial_tls.is_some();
     let health_meta = crate::health::HealthMeta::build(
@@ -173,6 +152,7 @@ pub async fn run(config_path: String) -> crate::Result<()> {
         config_dir: crate::config_dir(),
         data_dir: resolved_data_dir,
         tls_config: initial_tls,
+        tls_byo,
         upstream_mode: resolved_mode,
         root_hints,
         srtt: std::sync::RwLock::new(crate::srtt::SrttCache::new(config.upstream.srtt)),

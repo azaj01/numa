@@ -59,6 +59,8 @@ pub struct ServerCtx {
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
     pub tls_config: Option<ArcSwap<ServerConfig>>,
+    /// Set when `tls_config` is a user-supplied cert; suppresses regeneration.
+    pub tls_byo: bool,
     pub upstream_mode: UpstreamMode,
     pub root_hints: Vec<SocketAddr>,
     pub srtt: RwLock<SrttCache>,
