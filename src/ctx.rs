@@ -82,6 +82,7 @@ pub struct ServerCtx {
     /// answer) instead of hitting cache/forwarding/upstream. Local data
     /// (overrides, zones, .numa proxy, blocklist sinkhole) is unaffected.
     pub filter_aaaa: bool,
+    pub allow_from: crate::acl::AllowFromAcl,
 }
 
 /// Transport-agnostic DNS resolution. Runs the full pipeline (overrides, blocklist,

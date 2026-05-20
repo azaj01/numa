@@ -19,6 +19,13 @@ api_port = 5380
                               # still configure v6 records for local services.
                               # Default: false.
 
+# ── Client-IP allowlist ────────────────────────────────────────────
+# Required on WAN-facing binds, or numa becomes an open recursive
+# resolver. Loopback always allowed. Denied peers: silent UDP drop,
+# TLS close pre-handshake, DoH 403.
+#
+# allow_from = ["10.0.0.0/8", "192.168.0.0/16", "fd00::/8"]
+
 # [upstream]
 # mode = "forward"                              # "forward" (default) — relay to upstream
 #                                               # "recursive" — resolve from root hints (no address needed)

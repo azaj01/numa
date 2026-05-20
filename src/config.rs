@@ -105,6 +105,9 @@ pub struct ServerConfig {
     /// listener in PROXY-required mode.
     #[serde(default)]
     pub proxy_protocol: ProxyProtocolConfig,
+    /// CIDR allowlist applied at every DNS surface. Empty = disabled.
+    #[serde(default)]
+    pub allow_from: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -116,6 +119,7 @@ impl Default for ServerConfig {
             data_dir: None,
             filter_aaaa: false,
             proxy_protocol: ProxyProtocolConfig::default(),
+            allow_from: Vec::new(),
         }
     }
 }
