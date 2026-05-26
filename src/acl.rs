@@ -25,30 +25,67 @@ pub(crate) fn parse_cidr_list(entries: &[String], context: &str) -> Result<Vec<I
     Ok(nets)
 }
 
+/// Membership over an include set minus an exclude set, shared by `allow_from`
+/// and per-client policy. Canonicalizes the peer once here so v4-mapped IPv6
+/// (`::ffff:a.b.c.d`) from a dual-stack bind matches v4 CIDRs. Exclusion is set
+/// subtraction (not longest-prefix), so it always wins. Loopback / empty-set
+/// *policy* stays in the callers — they differ (allow vs passthrough).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CidrMatcher {
+    include: Vec<IpNet>,
+    exclude: Vec<IpNet>,
+}
+
+impl CidrMatcher {
+    pub(crate) fn from_entries(
+        include: &[String],
+        exclude: &[String],
+        context: &str,
+    ) -> Result<Self, String> {
+        Ok(CidrMatcher {
+            include: parse_cidr_list(include, context)?,
+            exclude: parse_cidr_list(exclude, &format!("{context} exclude"))?,
+        })
+    }
+
+    pub(crate) fn matches(&self, ip: IpAddr) -> bool {
+        let ip = ip.to_canonical();
+        if self.exclude.iter().any(|n| n.contains(&ip)) {
+            return false;
+        }
+        self.include.iter().any(|n| n.contains(&ip))
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.include.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct AllowFromAcl {
-    nets: Vec<IpNet>,
+    matcher: CidrMatcher,
 }
 
 impl AllowFromAcl {
     pub fn from_entries(entries: &[String]) -> Result<Self, String> {
         Ok(AllowFromAcl {
-            nets: parse_cidr_list(entries, "allow_from")?,
+            matcher: CidrMatcher::from_entries(entries, &[], "allow_from")?,
         })
     }
 
     pub fn allows(&self, peer: IpAddr) -> bool {
         // Dual-stack `[::]` binds deliver IPv4 clients as `::ffff:a.b.c.d`;
-        // canonicalize so IPv4 CIDR rules and the loopback check still match.
+        // canonicalize so the loopback check matches (CidrMatcher canonicalizes
+        // again for membership — idempotent).
         let peer = peer.to_canonical();
-        if self.nets.is_empty() || peer.is_loopback() {
+        if self.matcher.is_empty() || peer.is_loopback() {
             return true;
         }
-        self.nets.iter().any(|n| n.contains(&peer))
+        self.matcher.matches(peer)
     }
 
     pub fn is_enabled(&self) -> bool {
-        !self.nets.is_empty()
+        !self.matcher.is_empty()
     }
 }
 
@@ -61,43 +98,63 @@ mod tests {
             .unwrap()
     }
 
+    fn matcher(include: &[&str], exclude: &[&str]) -> CidrMatcher {
+        CidrMatcher::from_entries(
+            &include.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            &exclude.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            "test",
+        )
+        .unwrap()
+    }
+
+    fn check_allows(a: &AllowFromAcl, cases: &[(&str, bool)]) {
+        for &(peer, want) in cases {
+            assert_eq!(a.allows(peer.parse().unwrap()), want, "{peer}");
+        }
+    }
+
+    fn check_matches(m: &CidrMatcher, cases: &[(&str, bool)]) {
+        for &(peer, want) in cases {
+            assert_eq!(m.matches(peer.parse().unwrap()), want, "{peer}");
+        }
+    }
+
     #[test]
     fn empty_acl_allows_everything() {
         let a = AllowFromAcl::default();
         assert!(!a.is_enabled());
-        assert!(a.allows("1.2.3.4".parse().unwrap()));
-        assert!(a.allows("2001:db8::1".parse().unwrap()));
+        check_allows(&a, &[("1.2.3.4", true), ("2001:db8::1", true)]);
     }
 
     #[test]
     fn cidr_v4_allows_in_range_blocks_out_of_range() {
         let a = acl(&["192.168.0.0/16"]);
         assert!(a.is_enabled());
-        assert!(a.allows("192.168.1.5".parse().unwrap()));
-        assert!(!a.allows("10.0.0.1".parse().unwrap()));
+        check_allows(&a, &[("192.168.1.5", true), ("10.0.0.1", false)]);
     }
 
     #[test]
     fn cidr_v6_allows_in_range_blocks_out_of_range() {
-        let a = acl(&["2001:db8::/32"]);
-        assert!(a.allows("2001:db8::5".parse().unwrap()));
-        assert!(!a.allows("2001:db9::5".parse().unwrap()));
+        check_allows(
+            &acl(&["2001:db8::/32"]),
+            &[("2001:db8::5", true), ("2001:db9::5", false)],
+        );
     }
 
     #[test]
     fn bare_ip_is_treated_as_host_route() {
-        let a = acl(&["10.1.2.3", "fe80::1"]);
-        assert!(a.allows("10.1.2.3".parse().unwrap()));
-        assert!(!a.allows("10.1.2.4".parse().unwrap()));
-        assert!(a.allows("fe80::1".parse().unwrap()));
+        check_allows(
+            &acl(&["10.1.2.3", "fe80::1"]),
+            &[("10.1.2.3", true), ("10.1.2.4", false), ("fe80::1", true)],
+        );
     }
 
     #[test]
     fn loopback_always_allowed_even_when_acl_is_set() {
-        let a = acl(&["192.168.1.0/24"]);
-        assert!(a.allows("127.0.0.1".parse().unwrap()));
-        assert!(a.allows("127.0.0.2".parse().unwrap()));
-        assert!(a.allows("::1".parse().unwrap()));
+        check_allows(
+            &acl(&["192.168.1.0/24"]),
+            &[("127.0.0.1", true), ("127.0.0.2", true), ("::1", true)],
+        );
     }
 
     #[test]
@@ -110,24 +167,64 @@ mod tests {
     fn ipv4_mapped_client_matches_v4_rule() {
         // Dual-stack `[::]` binds deliver IPv4 peers as `::ffff:a.b.c.d`;
         // an IPv4 CIDR allowlist must still match (and still reject out-of-range).
-        let a = acl(&["192.168.1.0/24"]);
-        assert!(a.allows("::ffff:192.168.1.50".parse().unwrap()));
-        assert!(!a.allows("::ffff:10.0.0.1".parse().unwrap()));
+        check_allows(
+            &acl(&["192.168.1.0/24"]),
+            &[("::ffff:192.168.1.50", true), ("::ffff:10.0.0.1", false)],
+        );
     }
 
     #[test]
     fn ipv4_mapped_loopback_always_allowed() {
         // IPv4-mapped loopback on a dual-stack bind must pass through too.
-        let a = acl(&["192.168.1.0/24"]);
-        assert!(a.allows("::ffff:127.0.0.1".parse().unwrap()));
+        check_allows(&acl(&["192.168.1.0/24"]), &[("::ffff:127.0.0.1", true)]);
     }
 
     #[test]
     fn mixed_v4_and_v6_entries() {
-        let a = acl(&["10.0.0.0/8", "2001:db8::/32", "172.16.0.5"]);
-        assert!(a.allows("10.1.2.3".parse().unwrap()));
-        assert!(a.allows("2001:db8::abcd".parse().unwrap()));
-        assert!(a.allows("172.16.0.5".parse().unwrap()));
-        assert!(!a.allows("8.8.8.8".parse().unwrap()));
+        check_allows(
+            &acl(&["10.0.0.0/8", "2001:db8::/32", "172.16.0.5"]),
+            &[
+                ("10.1.2.3", true),
+                ("2001:db8::abcd", true),
+                ("172.16.0.5", true),
+                ("8.8.8.8", false),
+            ],
+        );
+    }
+
+    #[test]
+    fn exclude_subtracts_from_include() {
+        check_matches(
+            &matcher(&["192.168.1.0/24"], &["192.168.1.254"]),
+            &[("192.168.1.50", true), ("192.168.1.254", false)],
+        );
+    }
+
+    #[test]
+    fn exclude_wins_over_nested_include() {
+        // A more-specific include does not override an exclude — subtraction,
+        // not longest-prefix.
+        check_matches(
+            &matcher(&["192.168.1.0/24", "192.168.1.254/32"], &["192.168.1.254"]),
+            &[("192.168.1.254", false)],
+        );
+    }
+
+    #[test]
+    fn exclude_matches_v4_mapped_peer() {
+        check_matches(
+            &matcher(&["192.168.1.0/24"], &["192.168.1.254"]),
+            &[
+                ("::ffff:192.168.1.254", false),
+                ("::ffff:192.168.1.50", true),
+            ],
+        );
+    }
+
+    #[test]
+    fn empty_include_matches_nothing() {
+        let m = CidrMatcher::default();
+        assert!(m.is_empty());
+        check_matches(&m, &[("192.168.1.1", false)]);
     }
 }

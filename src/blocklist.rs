@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use log::{info, warn};
 
+#[derive(Debug)]
 pub struct BlocklistStore {
     domains: HashSet<String>,
     allowlist: HashSet<String>,
