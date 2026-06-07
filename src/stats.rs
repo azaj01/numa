@@ -213,6 +213,21 @@ impl QueryPath {
         }
     }
 
+    /// Paths returning trusted local data (zones, overrides, sinkhole) — exempt
+    /// from rebind protection. Exhaustive on purpose: a new `QueryPath` variant
+    /// must choose a side here, so an untrusted source fails closed.
+    pub fn returns_trusted_local_data(&self) -> bool {
+        match self {
+            QueryPath::Local | QueryPath::Overridden | QueryPath::Blocked => true,
+            QueryPath::Cached
+            | QueryPath::Forwarded
+            | QueryPath::Upstream
+            | QueryPath::Recursive
+            | QueryPath::Coalesced
+            | QueryPath::UpstreamError => false,
+        }
+    }
+
     pub fn parse_str(s: &str) -> Option<QueryPath> {
         if s.eq_ignore_ascii_case("LOCAL") {
             Some(QueryPath::Local)
