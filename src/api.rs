@@ -52,7 +52,6 @@ pub fn router(ctx: Arc<ServerCtx>) -> Router {
         )
         .route("/rebind", get(rebind_status))
         .route("/rebind/toggle", put(rebind_toggle))
-        .route("/rebind/allowlist", get(rebind_allowlist))
         .route("/rebind/allowlist", post(rebind_allowlist_add))
         .route(
             "/rebind/allowlist/{domain}",
@@ -816,10 +815,6 @@ async fn rebind_toggle(
 ) -> Json<serde_json::Value> {
     ctx.rebind.write().unwrap().set_enabled(req.enabled);
     Json(serde_json::json!({ "enabled": req.enabled }))
-}
-
-async fn rebind_allowlist(State(ctx): State<Arc<ServerCtx>>) -> Json<Vec<String>> {
-    Json(ctx.rebind.read().unwrap().allowlist())
 }
 
 async fn rebind_allowlist_add(
