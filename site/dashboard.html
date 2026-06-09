@@ -1128,9 +1128,9 @@ function applyLogFilter() {
 
   tbody.innerHTML = filtered.map(e => {
     const allowBtn = e.path === 'BLOCKED'
-      ? ` <button class="btn-delete" onclick="postDomain('/blocking/allowlist','${e.domain}')" title="Allow this domain" style="color:var(--emerald);font-size:0.65rem;">allow</button>`
+      ? ` <button class="btn-delete" data-domain="${h(e.domain)}" onclick="postDomain('/blocking/allowlist', this.dataset.domain)" title="Allow this domain" style="color:var(--emerald);font-size:0.65rem;">allow</button>`
       : e.rebind_stripped
-      ? ` <button class="btn-delete" onclick="postDomain('/rebind/allowlist','${e.domain}')" title="Stop stripping private IPs for this domain" style="color:var(--emerald);font-size:0.65rem;">allow</button>`
+      ? ` <button class="btn-delete" data-domain="${h(e.domain)}" onclick="postDomain('/rebind/allowlist', this.dataset.domain)" title="Stop stripping private IPs for this domain" style="color:var(--emerald);font-size:0.65rem;">allow</button>`
       : '';
     const rebindTag = e.rebind_stripped
       ? ` <span class="path-tag" style="background:rgba(192,98,58,0.12);color:var(--amber-dim);" title="Private IPs stripped by rebind protection">stripped</span>`
@@ -1139,7 +1139,7 @@ function applyLogFilter() {
     <tr title="Source: ${e.src || 'unknown'}">
       <td>${formatTime(e.timestamp_epoch)}<br><span class="src-tag">${shortSrc(e.src)}</span></td>
       <td>${e.query_type}</td>
-      <td class="domain-cell" title="${e.domain}">${e.domain}${allowBtn}</td>
+      <td class="domain-cell" title="${h(e.domain)}">${h(e.domain)}${allowBtn}</td>
       <td><span class="path-tag ${e.path}">${e.path}</span>${rebindTag}</td>
       <td><span class="path-tag ${e.transport}">${e.transport}</span></td>
       <td style="white-space:nowrap;"><span style="display:inline-block;width:15px;text-align:center;">${e.dnssec === 'secure' ? '<svg title="DNSSEC verified" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--emerald)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>' : ''}</span>${e.rescode}</td>
@@ -1222,7 +1222,7 @@ function renderCache(entries) {
   const sorted = entries.sort((a, b) => b.ttl_remaining - a.ttl_remaining).slice(0, 50);
   el.innerHTML = sorted.map(e => `
     <div class="cache-item">
-      <span class="cache-domain" title="${e.domain}">${e.domain}</span>
+      <span class="cache-domain" title="${h(e.domain)}">${h(e.domain)}</span>
       <span class="cache-ttl">${e.query_type} ${e.ttl_remaining}s</span>
     </div>
   `).join('');
@@ -1417,7 +1417,7 @@ async function checkDomain(event) {
       el.className = 'check-result-blocked';
       el.innerHTML = `<strong>Blocked</strong> — ${h(result.reason)}` +
         (result.matched_rule ? `<br>Rule: <code>${h(result.matched_rule)}</code>` : '') +
-        ` <button class="btn-delete" onclick="postDomain('/blocking/allowlist','${h(domain)}')" style="color:var(--emerald);font-size:0.7rem;margin-left:0.4rem;">allow</button>`;
+        ` <button class="btn-delete" data-domain="${h(domain)}" onclick="postDomain('/blocking/allowlist', this.dataset.domain)" style="color:var(--emerald);font-size:0.7rem;margin-left:0.4rem;">allow</button>`;
     } else {
       el.className = 'check-result-allowed';
       el.innerHTML = `<strong>Allowed</strong> — ${h(result.reason)}` +
