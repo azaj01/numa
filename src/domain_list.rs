@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use crate::blocklist::{find_in_set, normalize};
 use crate::persist::{load_json_vec, save_json};
 
-#[derive(Default)]
 pub struct PersistedDomainList {
     config: HashSet<String>, // from numa.toml; reloaded each boot, never saved
     user: HashSet<String>,   // runtime-added; persisted to `persist_path`
