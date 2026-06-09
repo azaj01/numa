@@ -115,6 +115,7 @@ api_port = 5380
 # refresh_hours = 24
 # lists = [
 #     "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/hosts/pro.txt",
+#     "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/wildcard/nsfw-onlydomains.txt",  # adult-content (opt-in; hagezi ships nsfw only as wildcard/adblock, not hosts/)
 #     "file:///etc/numa/local-blocklist.txt",  # local hosts-style file
 #     "/etc/numa/extra-blocks.txt",            # bare absolute path also works
 # ]
