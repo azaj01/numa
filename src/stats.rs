@@ -134,6 +134,7 @@ pub struct ServerStats {
     pub(crate) proxy_v2_rejected_signature: u64,
     pub(crate) proxy_v2_local_command: u64,
     pub(crate) proxy_v2_timeout: u64,
+    rebind_stripped: u64,
     started_at: SystemTime,
 }
 
@@ -286,8 +287,15 @@ impl ServerStats {
             proxy_v2_rejected_signature: 0,
             proxy_v2_local_command: 0,
             proxy_v2_timeout: 0,
+            rebind_stripped: 0,
             started_at: SystemTime::now(),
         }
+    }
+
+    /// One per affected query (not per stripped RR), matching the other
+    /// per-query counters in `queries.*`.
+    pub fn record_rebind_stripped(&mut self) {
+        self.rebind_stripped += 1;
     }
 
     pub fn record(
@@ -361,6 +369,7 @@ impl ServerStats {
             proxy_v2_rejected_signature: self.proxy_v2_rejected_signature,
             proxy_v2_local_command: self.proxy_v2_local_command,
             proxy_v2_timeout: self.proxy_v2_timeout,
+            rebind_stripped: self.rebind_stripped,
         }
     }
 
@@ -371,7 +380,7 @@ impl ServerStats {
         let secs = uptime.as_secs() % 60;
 
         log::info!(
-            "STATS | uptime {}h{}m{}s | total {} | fwd {} | upstream {} | recursive {} | coalesced {} | cached {} | local {} | override {} | blocked {} | errors {} | up-udp {} | up-tcp {} | up-doh {} | up-dot {} | up-odoh {}",
+            "STATS | uptime {}h{}m{}s | total {} | fwd {} | upstream {} | recursive {} | coalesced {} | cached {} | local {} | override {} | blocked {} | errors {} | up-udp {} | up-tcp {} | up-doh {} | up-dot {} | up-odoh {} | rebind {}",
             hours, mins, secs,
             self.queries_total,
             self.queries_forwarded,
@@ -388,6 +397,7 @@ impl ServerStats {
             self.upstream_transport_doh,
             self.upstream_transport_dot,
             self.upstream_transport_odoh,
+            self.rebind_stripped,
         );
     }
 }
@@ -418,4 +428,5 @@ pub struct StatsSnapshot {
     pub proxy_v2_rejected_signature: u64,
     pub proxy_v2_local_command: u64,
     pub proxy_v2_timeout: u64,
+    pub rebind_stripped: u64,
 }

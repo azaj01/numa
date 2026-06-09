@@ -202,7 +202,7 @@ pub async fn run(config_path: String) -> crate::Result<()> {
         filter_aaaa: config.server.filter_aaaa,
         allow_from,
         client_policy,
-        rebind,
+        rebind: RwLock::new(rebind),
     });
 
     let zone_count: usize = ctx.zone_map.len();

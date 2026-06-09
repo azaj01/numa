@@ -33,6 +33,7 @@ const DEFAULT_RANGES: &[&str] = &[
 pub struct RebindFilter {
     enabled: bool,
     ranges: CidrMatcher,
+    range_strings: Vec<String>, // effective ranges, kept verbatim for the API
     allowlist: HashSet<String>, // normalized: lowercase, no trailing dot
 }
 
@@ -42,21 +43,46 @@ impl RebindFilter {
         allowlist: &[String],
         custom_ranges: &[String],
     ) -> Result<Self, String> {
-        let ranges = if custom_ranges.is_empty() {
-            let defaults: Vec<String> = DEFAULT_RANGES.iter().map(|s| s.to_string()).collect();
-            CidrMatcher::from_entries(&defaults, &[], "rebind_private_ranges")?
+        let range_strings: Vec<String> = if custom_ranges.is_empty() {
+            DEFAULT_RANGES.iter().map(|s| s.to_string()).collect()
         } else {
-            CidrMatcher::from_entries(custom_ranges, &[], "rebind_private_ranges")?
+            custom_ranges.to_vec()
         };
+        let ranges = CidrMatcher::from_entries(&range_strings, &[], "rebind_private_ranges")?;
         Ok(RebindFilter {
             enabled,
             ranges,
+            range_strings,
             allowlist: allowlist.iter().map(|d| normalize(d)).collect(),
         })
     }
 
     pub fn is_enabled(&self) -> bool {
         self.enabled
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// Effective private ranges (custom or built-in defaults), for the API.
+    pub fn ranges(&self) -> &[String] {
+        &self.range_strings
+    }
+
+    /// Allowlisted domains, sorted for stable output.
+    pub fn allowlist(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.allowlist.iter().cloned().collect();
+        v.sort();
+        v
+    }
+
+    pub fn add_to_allowlist(&mut self, domain: &str) {
+        self.allowlist.insert(normalize(domain));
+    }
+
+    pub fn remove_from_allowlist(&mut self, domain: &str) -> bool {
+        self.allowlist.remove(&normalize(domain))
     }
 
     /// Strip private A/AAAA answers (and private SVCB/HTTPS address hints) from

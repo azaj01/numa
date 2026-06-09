@@ -85,7 +85,7 @@ pub struct ServerCtx {
     pub filter_aaaa: bool,
     pub allow_from: crate::acl::AllowFromAcl,
     pub client_policy: crate::client_policy::ClientPolicySet,
-    pub rebind: crate::rebind::RebindFilter,
+    pub rebind: RwLock<crate::rebind::RebindFilter>,
 }
 
 /// Transport-agnostic DNS resolution. Runs the full pipeline (overrides, blocklist,
@@ -149,12 +149,13 @@ pub async fn resolve_query(
     // Runs after DNSSEC validation + the unfiltered cache insert above (so the
     // cache keeps the true record), before shaping. UpstreamError carries no
     // answers, so it's a no-op.
-    if !path.returns_trusted_local_data() {
-        let stripped = ctx.rebind.apply(&qname, &mut response);
+    let rebind_stripped = !path.returns_trusted_local_data() && {
+        let stripped = ctx.rebind.read().unwrap().apply(&qname, &mut response);
         if stripped > 0 {
             // A stripped Secure answer is no longer the validated one; don't
             // claim AD over a NODATA the validator never proved.
             response.header.authed_data = false;
+            ctx.stats.lock().unwrap().record_rebind_stripped();
             info!(
                 "REBIND | {} | stripped {} private RR(s) | {}",
                 qname,
@@ -162,7 +163,8 @@ pub async fn resolve_query(
                 path.as_str()
             );
         }
-    }
+        stripped > 0
+    };
 
     shape_response_for_client(&mut response, &query, ctx.filter_aaaa);
 
@@ -206,6 +208,7 @@ pub async fn resolve_query(
         rescode: response.header.rescode,
         latency_us: elapsed.as_micros() as u64,
         dnssec,
+        rebind_stripped,
     });
 
     Ok((resp_buffer, path))
@@ -926,7 +929,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::net::{Ipv4Addr, Ipv6Addr};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, RwLock};
     use tokio::sync::broadcast;
 
     // ---- InflightGuard unit tests ----
@@ -1391,7 +1394,7 @@ mod tests {
         let upstream_addr = crate::testutil::mock_upstream(resp).await;
 
         let mut ctx = crate::testutil::test_ctx().await;
-        ctx.rebind = crate::rebind::RebindFilter::new(true, &[], &[]).unwrap();
+        ctx.rebind = RwLock::new(crate::rebind::RebindFilter::new(true, &[], &[]).unwrap());
         ctx.forwarding_rules = vec![ForwardingRule::new(
             "evil.test".to_string(),
             UpstreamPool::new(vec![Upstream::Udp(upstream_addr)], vec![]),
@@ -1409,9 +1412,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pipeline_rebind_stats_count_queries_not_records() {
+        let mut resp = DnsPacket::new();
+        resp.header.response = true;
+        resp.header.rescode = ResultCode::NOERROR;
+        for last_octet in [1, 2] {
+            resp.answers.push(DnsRecord::A {
+                domain: "intranet.evil.test".to_string(),
+                addr: format!("192.168.1.{last_octet}").parse().unwrap(),
+                ttl: 60,
+            });
+        }
+        let upstream_addr = crate::testutil::mock_upstream(resp).await;
+
+        let mut ctx = crate::testutil::test_ctx().await;
+        ctx.rebind = RwLock::new(crate::rebind::RebindFilter::new(true, &[], &[]).unwrap());
+        ctx.forwarding_rules = vec![ForwardingRule::new(
+            "evil.test".to_string(),
+            UpstreamPool::new(vec![Upstream::Udp(upstream_addr)], vec![]),
+        )];
+        let ctx = Arc::new(ctx);
+
+        let (resp, _) = resolve_in_test(&ctx, "intranet.evil.test", QueryType::A).await;
+        assert!(resp.answers.is_empty(), "both private answers stripped");
+        assert_eq!(
+            ctx.stats.lock().unwrap().snapshot().rebind_stripped,
+            1,
+            "queries.rebind_stripped counts affected queries, not stripped RRs"
+        );
+    }
+
+    #[tokio::test]
     async fn pipeline_rebind_leaves_local_override_untouched() {
         let mut ctx = crate::testutil::test_ctx().await;
-        ctx.rebind = crate::rebind::RebindFilter::new(true, &[], &[]).unwrap();
+        ctx.rebind = RwLock::new(crate::rebind::RebindFilter::new(true, &[], &[]).unwrap());
         ctx.overrides
             .write()
             .unwrap()
@@ -1438,7 +1472,7 @@ mod tests {
         // ranges — so the exclusion gate must exempt it, or rebind protection
         // would silently eat ad-blocking.
         let mut ctx = crate::testutil::test_ctx().await;
-        ctx.rebind = crate::rebind::RebindFilter::new(true, &[], &[]).unwrap();
+        ctx.rebind = RwLock::new(crate::rebind::RebindFilter::new(true, &[], &[]).unwrap());
         let mut domains = std::collections::HashSet::new();
         domains.insert("ads.tracker.test".to_string());
         ctx.blocklist.write().unwrap().swap_domains(domains, vec![]);
