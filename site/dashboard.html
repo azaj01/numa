@@ -1128,9 +1128,11 @@ function applyLogFilter() {
 
   tbody.innerHTML = filtered.map(e => {
     const allowBtn = e.path === 'BLOCKED'
-      ? ` <button class="btn-delete" data-domain="${h(e.domain)}" onclick="postDomain('/blocking/allowlist', this.dataset.domain)" title="Allow this domain" style="color:var(--emerald);font-size:0.65rem;">allow</button>`
+      ? ` <button class="btn-delete" data-domain="${h(e.domain)}" onclick="unblockDomain(this.dataset.domain)" title="Allow this domain" style="color:var(--emerald);font-size:0.65rem;">allow</button>`
       : e.rebind_stripped
       ? ` <button class="btn-delete" data-domain="${h(e.domain)}" onclick="postDomain('/rebind/allowlist', this.dataset.domain)" title="Stop stripping private IPs for this domain" style="color:var(--emerald);font-size:0.65rem;">allow</button>`
+      : e.path !== 'LOCAL'
+      ? ` <button class="btn-delete" data-domain="${h(e.domain)}" onclick="postDomain('/blocking/blocklist', this.dataset.domain)" title="Blocks this domain and its subdomains" style="font-size:0.65rem;">block</button>`
       : '';
     const rebindTag = e.rebind_stripped
       ? ` <span class="path-tag" style="background:rgba(192,98,58,0.12);color:var(--amber-dim);" title="Private IPs stripped by rebind protection">stripped</span>`
@@ -1230,7 +1232,7 @@ function renderCache(entries) {
 
 async function refresh() {
   try {
-    const [stats, logs, overrides, cache, services, blockingInfo, allowlist] = await Promise.all([
+    const [stats, logs, overrides, cache, services, blockingInfo, allowlist, manualBlocks] = await Promise.all([
       fetchJSON('/stats'),
       fetchJSON('/query-log?limit=200'),
       fetchJSON('/overrides'),
@@ -1238,6 +1240,7 @@ async function refresh() {
       fetchJSON('/services'),
       fetchJSON('/blocking/stats'),
       fetchJSON('/blocking/allowlist'),
+      fetchJSON('/blocking/blocklist'),
     ]);
 
     // Connection status
@@ -1350,7 +1353,7 @@ async function refresh() {
     renderCache(cache);
     renderServices(services);
     renderBlockingInfo(blockingInfo);
-    renderAllowlist(allowlist);
+    renderAllowlist(allowlist, manualBlocks);
     renderMemory(stats.memory, stats);
 
   } catch (err) {
@@ -1417,7 +1420,7 @@ async function checkDomain(event) {
       el.className = 'check-result-blocked';
       el.innerHTML = `<strong>Blocked</strong> — ${h(result.reason)}` +
         (result.matched_rule ? `<br>Rule: <code>${h(result.matched_rule)}</code>` : '') +
-        ` <button class="btn-delete" data-domain="${h(domain)}" onclick="postDomain('/blocking/allowlist', this.dataset.domain)" style="color:var(--emerald);font-size:0.7rem;margin-left:0.4rem;">allow</button>`;
+        ` <button class="btn-delete" data-domain="${h(domain)}" onclick="unblockDomain(this.dataset.domain)" style="color:var(--emerald);font-size:0.7rem;margin-left:0.4rem;">allow</button>`;
     } else {
       el.className = 'check-result-allowed';
       el.innerHTML = `<strong>Allowed</strong> — ${h(result.reason)}` +
@@ -1468,36 +1471,59 @@ function renderBlockingInfo(info) {
   `;
 }
 
-function renderAllowlist(entries) {
-  if (document.activeElement && document.activeElement.id === 'allowDomainInput') return;
+function renderAllowlist(entries, manualBlocks) {
+  const focused = document.activeElement && document.activeElement.id;
+  if (focused === 'allowDomainInput' || focused === 'blockDomainInput') return;
   const el = document.getElementById('blockingAllowlist');
   const count = entries.length;
+  const blocked = manualBlocks || [];
   el.innerHTML = `
     <div style="font-size:0.65rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);margin-bottom:0.4rem;">Allowlist${count ? ` (${count})` : ''}</div>
     ${count ? entries.map(d => `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:0.25rem 0;border-bottom:1px solid var(--border);">
-        <span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--emerald);">${d}</span>
-        <button class="btn-delete" onclick="removeAllowlistDomain('${d}')">&times;</button>
+        <span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--emerald);">${h(d)}</span>
+        <button class="btn-delete" data-domain="${h(d)}" onclick="deleteDomain('/blocking/allowlist', this.dataset.domain)">&times;</button>
       </div>
     `).join('') : '<div class="empty-state">No exceptions</div>'}
-    <form onsubmit="return addAllowlistDomain(event)" style="display:flex;gap:0.4rem;margin-top:0.4rem;">
+    <form onsubmit="return addDomain(event, '/blocking/allowlist')" style="display:flex;gap:0.4rem;margin-top:0.4rem;">
       <input type="text" id="allowDomainInput" placeholder="domain to allow" required style="flex:1;font-family:var(--font-mono);font-size:0.75rem;padding:0.35rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-surface);color:var(--text-primary);outline:none;">
       <button type="submit" class="btn" style="background:var(--emerald);color:var(--text-on-btn);flex-shrink:0;">Allow</button>
+    </form>
+    <div style="font-size:0.65rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);margin:0.8rem 0 0.4rem;">Manually blocked${blocked.length ? ` (${blocked.length})` : ''}</div>
+    ${blocked.map(d => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:0.25rem 0;border-bottom:1px solid var(--border);">
+        <span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--rose);">${h(d)}</span>
+        <button class="btn-delete" data-domain="${h(d)}" onclick="deleteDomain('/blocking/blocklist', this.dataset.domain)">&times;</button>
+      </div>
+    `).join('')}
+    <form onsubmit="return addDomain(event, '/blocking/blocklist')" style="display:flex;gap:0.4rem;margin-top:0.4rem;">
+      <input type="text" id="blockDomainInput" placeholder="domain to block" required style="flex:1;font-family:var(--font-mono);font-size:0.75rem;padding:0.35rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-surface);color:var(--text-primary);outline:none;">
+      <button type="submit" class="btn" style="background:var(--rose);color:var(--text-on-btn);flex-shrink:0;">Block</button>
     </form>
   `;
 }
 
-async function addAllowlistDomain(event) {
+async function addDomain(event, path) {
   event.preventDefault();
-  const input = document.getElementById('allowDomainInput');
+  const input = event.target.querySelector('input');
   const domain = input.value.trim();
-  if (domain && (await postDomain('/blocking/allowlist', domain))) input.value = '';
+  if (domain && (await postDomain(path, domain))) input.value = '';
   return false;
 }
 
-async function removeAllowlistDomain(domain) {
+// Undo a manual block if one exists; otherwise add an allowlist exception
+// (for domains blocked by a list, which the user can't edit).
+async function unblockDomain(domain) {
   try {
-    await fetch(API + '/blocking/allowlist/' + encodeURIComponent(domain), { method: 'DELETE' });
+    const res = await fetch(API + '/blocking/blocklist/' + encodeURIComponent(domain), { method: 'DELETE' });
+    if (res.ok) refresh();
+    else postDomain('/blocking/allowlist', domain);
+  } catch (err) {}
+}
+
+async function deleteDomain(path, domain) {
+  try {
+    await fetch(API + path + '/' + encodeURIComponent(domain), { method: 'DELETE' });
     refresh();
   } catch (err) {}
 }
